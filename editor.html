@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Snake VI - Level Editor</title>
+    <style>
+        body { margin: 0; overflow: hidden; display: flex; font-family: sans-serif; background: #222; color: #fff; }
+        #sidebar { width: 300px; background: #333; padding: 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 15px; overflow-y: auto; z-index: 10; border-right: 2px solid #111;}
+        #canvas-container { flex-grow: 1; position: relative; cursor: crosshair; }
+        canvas { display: block; width: 100%; height: 100%; }
+        h2 { margin-top: 0; font-size: 1.2rem; border-bottom: 1px solid #555; padding-bottom: 10px; }
+        .group { display: flex; flex-direction: column; gap: 5px; }
+        button, select, input { padding: 8px; background: #444; color: #fff; border: 1px solid #555; cursor: pointer; border-radius: 4px; }
+        button:hover { background: #555; }
+        .tile-btn { text-align: left; display: flex; align-items: center; gap: 10px; font-weight: bold; }
+        .tile-btn.active { background: #66b2ff; color: #000; border-color: #fff; }
+        .color-box { width: 20px; height: 20px; border: 1px solid #000; }
+        .row { display: flex; gap: 10px; align-items: center; }
+        .row input { width: 60px; }
+    </style>
+</head>
+<body>
+
+<div id="sidebar">
+    <h2>Snake VI Map Editor</h2>
+
+    <div class="group">
+        <label>Map Size (Tiles)</label>
+        <div class="row">
+            W: <input type="number" id="mapWidth" value="64" min="10" max="500">
+            H: <input type="number" id="mapHeight" value="64" min="10" max="500">
+            <button id="btnResize">Apply Size</button>
+        </div>
+    </div>
+
+    <div class="group">
+        <label>Select Tile (Left-Click to Paint)</label>
+        <div id="tileMenu" class="group"></div>
+    </div>
+
+    <div class="group">
+        <label>Tools (Right-Click to Pan, Scroll to Zoom)</label>
+        <button id="btnGenIsland" style="background: #2b7a9e;">Generate Random Island</button>
+        <button id="btnFill">Fill Map with Selected</button>
+    </div>
+
+    <div class="group" style="margin-top: auto;">
+        <button id="btnSave" style="background: #28a745;">Save Map (JSON)</button>
+        <label style="margin-top: 10px;">Load Map:</label>
+        <input type="file" id="fileLoad" accept=".json">
+    </div>
+</div>
+
+<div id="canvas-container">
+    <canvas id="editorCanvas"></canvas>
+</div>
+
+<script>
+    // --- Data & Configuration ---
+    const mapTiles = {
+        ERASER: { name: 'Eraser (Water)', color: '#0b1020' }, // Represents null
+        GRASS: { name: 'Grass', color: '#3d9f34' },
+        ROAD: { name: 'Road', color: '#1a1a1a' },
+        SIDEWALK: { name: 'Sidewalk', color: '#d8d8d8' },
+        SKYSCRAPER1: { name: 'Skyscraper', color: '#e1c914' },
+    };
+
+    const tileSize = 256;
+    let mapWidth = parseInt(document.getElementById('mapWidth').value);
+    let mapHeight = parseInt(document.getElementById('mapHeight').value);
+    let map = [];
+    let selectedTile = 'GRASS';
+
+    // Camera / Viewport
+    let camera = { x: (mapWidth * tileSize)/2, y: (mapHeight * tileSize)/2 };
+    let zoom = 0.05; // Start zoomed out
+    
+    // Input state
+    let isPainting = false;
+    let isPanning = false;
+    let lastMouse = { x: 0, y: 0 };
+
+    // --- Initialization ---
+    const canvas = document.getElementById('editorCanvas');
+    const ctx = canvas.getContext('2d');
+
+    function initMap() {
+        map = [];
+        for (let y = 0; y < mapHeight; y++) {
+            map[y] = [];
+            for (let x = 0; x < mapWidth; x++) {
+                map[y][x] = null; // Start as water
+            }
+        }
+    }
+
+    function buildUI() {
+        const menu = document.getElementById('tileMenu');
+        menu.innerHTML = '';
+        Object.keys(mapTiles).forEach(key => {
+            const btn = document.createElement('button');
+            btn.className = `tile-btn ${key === selectedTile ? 'active' : ''}`;
+            
+            // Add dashed border for eraser to make it distinct
+            const borderStyle = key === 'ERASER' ? 'border: 1px dashed #fff;' : 'border: 1px solid #000;';
+            btn.innerHTML = `<div class="color-box" style="background: ${mapTiles[key].color}; ${borderStyle}"></div> ${mapTiles[key].name}`;
+            
+            btn.onclick = () => {
+                selectedTile = key;
+                buildUI(); // Refresh active state
+            };
+            menu.appendChild(btn);
+        });
+    }
+
+    function resizeCanvas() {
+        canvas.width = canvas.parentElement.clientWidth;
+        canvas.height = canvas.parentElement.clientHeight;
+        render();
+    }
+    window.addEventListener('resize', resizeCanvas);
+
+    // --- Interaction ---
+    function getMouseWorld(e) {
+        const rect = canvas.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+        
+        const worldX = (mouseX - canvas.width / 2) / zoom + camera.x;
+        const worldY = (mouseY - canvas.height / 2) / zoom + camera.y;
+        return { x: worldX, y: worldY };
+    }
+
+    function paint(e) {
+        if (!isPainting) return;
+        const pos = getMouseWorld(e);
+        const tx = Math.floor(pos.x / tileSize);
+        const ty = Math.floor(pos.y / tileSize);
+        
+        if (tx >= 0 && tx < mapWidth && ty >= 0 && ty < mapHeight) {
+            // Apply null if eraser, otherwise the tile key
+            map[ty][tx] = selectedTile === 'ERASER' ? null : selectedTile;
+            render();
+        }
+    }
+
+    canvas.addEventListener('mousedown', (e) => {
+        if (e.button === 0) { // Left click
+            isPainting = true;
+            paint(e);
+        } else if (e.button === 2) { // Right click
+            isPanning = true;
+            lastMouse = { x: e.clientX, y: e.clientY };
+        }
+    });
+
+    canvas.addEventListener('mousemove', (e) => {
+        if (isPainting) paint(e);
+        if (isPanning) {
+            const dx = e.clientX - lastMouse.x;
+            const dy = e.clientY - lastMouse.y;
+            camera.x -= dx / zoom;
+            camera.y -= dy / zoom;
+            lastMouse = { x: e.clientX, y: e.clientY };
+            render();
+        }
+    });
+
+    window.addEventListener('mouseup', (e) => {
+        if (e.button === 0) isPainting = false;
+        if (e.button === 2) isPanning = false;
+    });
+
+    canvas.addEventListener('contextmenu', e => e.preventDefault()); 
+
+    canvas.addEventListener('wheel', (e) => {
+        const zoomAmount = e.deltaY > 0 ? 0.9 : 1.1;
+        zoom *= zoomAmount;
+        zoom = Math.max(0.01, Math.min(zoom, 5)); 
+        render();
+    });
+
+    // --- Auto Generation Algorithms ---
+    document.getElementById('btnGenIsland').onclick = () => {
+        // 1. Wipe everything to Water (null)
+        for (let y = 0; y < mapHeight; y++) {
+            for (let x = 0; x < mapWidth; x++) {
+                map[y][x] = null;
+            }
+        }
+
+        // 2. Generate Noisy Island Shape
+        const cx = mapWidth / 2;
+        const cy = mapHeight / 2;
+        const maxRadius = Math.min(mapWidth, mapHeight) * 0.40;
+
+        for (let y = 0; y < mapHeight; y++) {
+            for (let x = 0; x < mapWidth; x++) {
+                const dx = x - cx;
+                const dy = y - cy;
+                let dist = Math.sqrt(dx * dx + dy * dy);
+                
+                // Add jitter to create an organic coastline
+                dist += (Math.random() * 10 - 5); 
+
+                if (dist < maxRadius) {
+                    map[y][x] = 'GRASS';
+                }
+            }
+        }
+
+        // 3. Generate Branching Roads via "Random Walkers"
+        let walkers = [
+            { x: Math.floor(cx), y: Math.floor(cy), dx: 1, dy: 0, life: mapWidth },
+            { x: Math.floor(cx), y: Math.floor(cy), dx: -1, dy: 0, life: mapWidth },
+            { x: Math.floor(cx), y: Math.floor(cy), dx: 0, dy: 1, life: mapHeight },
+            { x: Math.floor(cx), y: Math.floor(cy), dx: 0, dy: -1, life: mapHeight }
+        ];
+
+        let iterations = 0;
+        while (walkers.length > 0 && iterations < 8000) {
+            iterations++;
+            let w = walkers.shift();
+            
+            w.x += w.dx;
+            w.y += w.dy;
+            w.life--;
+
+            // Stop if walker goes out of bounds or falls into the water
+            if (w.x < 0 || w.x >= mapWidth || w.y < 0 || w.y >= mapHeight) continue;
+            if (map[w.y][w.x] === null) continue; 
+
+            map[w.y][w.x] = 'ROAD';
+
+            if (w.life > 0) {
+                let r = Math.random();
+                if (r < 0.05) {
+                    // Turn left 90 deg
+                    let temp = w.dx; w.dx = w.dy; w.dy = -temp;
+                } else if (r < 0.10) {
+                    // Turn right 90 deg
+                    let temp = w.dx; w.dx = -w.dy; w.dy = temp;
+                } else if (r < 0.15) {
+                    // Branch into an intersection
+                    walkers.push({ x: w.x, y: w.y, dx: -w.dy, dy: w.dx, life: w.life * 0.5 });
+                    walkers.push({ x: w.x, y: w.y, dx: w.dy, dy: -w.dx, life: w.life * 0.5 });
+                }
+                walkers.push(w); // Keep walking
+            }
+        }
+
+        // 4. Decorate (Sidewalks & Skyscrapers)
+        // We use a temporary map copy to avoid checking tiles we are currently changing
+        let tempMap = JSON.parse(JSON.stringify(map));
+        for (let y = 1; y < mapHeight - 1; y++) {
+            for (let x = 1; x < mapWidth - 1; x++) {
+                if (map[y][x] === 'GRASS') {
+                    // Check orthogonal neighbors for a road
+                    if (map[y-1][x] === 'ROAD' || map[y+1][x] === 'ROAD' || 
+                        map[y][x-1] === 'ROAD' || map[y][x+1] === 'ROAD') {
+                        tempMap[y][x] = 'SIDEWALK';
+                    } 
+                    // Randomly place skyscrapers out in the grass
+                    else if (Math.random() < 0.1) {
+                        tempMap[y][x] = 'SKYSCRAPER1';
+                    }
+                }
+            }
+        }
+        map = tempMap;
+        render();
+    };
+
+    // --- UI Actions ---
+    document.getElementById('btnResize').onclick = () => {
+        const newW = parseInt(document.getElementById('mapWidth').value);
+        const newH = parseInt(document.getElementById('mapHeight').value);
+        
+        const newMap = [];
+        for (let y = 0; y < newH; y++) {
+            newMap[y] = [];
+            for (let x = 0; x < newW; x++) {
+                newMap[y][x] = (map[y] && map[y][x] !== undefined) ? map[y][x] : null;
+            }
+        }
+        map = newMap;
+        mapWidth = newW;
+        mapHeight = newH;
+        render();
+    };
+
+    document.getElementById('btnFill').onclick = () => {
+        const fillTile = selectedTile === 'ERASER' ? null : selectedTile;
+        for(let y=0; y<mapHeight; y++) {
+            for(let x=0; x<mapWidth; x++) {
+                map[y][x] = fillTile;
+            }
+        }
+        render();
+    }
+
+    // --- Save and Load ---
+    document.getElementById('btnSave').onclick = () => {
+        const data = { width: mapWidth, height: mapHeight, mapData: map };
+        const blob = new Blob([JSON.stringify(data)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "island_level.json";
+        a.click();
+        URL.revokeObjectURL(url);
+    };
+
+    document.getElementById('fileLoad').addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const data = JSON.parse(e.target.result);
+            mapWidth = data.width;
+            mapHeight = data.height;
+            map = data.mapData;
+            document.getElementById('mapWidth').value = mapWidth;
+            document.getElementById('mapHeight').value = mapHeight;
+            render();
+        };
+        reader.readAsText(file);
+    });
+
+    // --- Rendering ---
+    function render() {
+        // Deep blue background to represent water bounds
+        ctx.fillStyle = '#0b1020';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        ctx.save();
+        ctx.translate(canvas.width / 2, canvas.height / 2);
+        ctx.scale(zoom, zoom);
+        ctx.translate(-camera.x, -camera.y);
+
+        const viewLeft = camera.x - (canvas.width / 2) / zoom;
+        const viewRight = camera.x + (canvas.width / 2) / zoom;
+        const viewTop = camera.y - (canvas.height / 2) / zoom;
+        const viewBottom = camera.y + (canvas.height / 2) / zoom;
+
+        const startX = Math.max(0, Math.floor(viewLeft / tileSize));
+        const endX = Math.min(mapWidth - 1, Math.ceil(viewRight / tileSize));
+        const startY = Math.max(0, Math.floor(viewTop / tileSize));
+        const endY = Math.min(mapHeight - 1, Math.ceil(viewBottom / tileSize));
+
+        // Draw tiles
+        for (let y = startY; y <= endY; y++) {
+            for (let x = startX; x <= endX; x++) {
+                const tileID = map[y][x];
+                
+                // If it's null (water), skip drawing so the deep blue background shows through
+                if (!tileID) continue; 
+                
+                ctx.fillStyle = mapTiles[tileID].color;
+                ctx.fillRect(x * tileSize, y * tileSize, tileSize, tileSize);
+                
+                // Draw grid lines on land
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+                ctx.lineWidth = 4;
+                ctx.strokeRect(x * tileSize, y * tileSize, tileSize, tileSize);
+            }
+        }
+        
+        // Map Boundary box (to visualize the edge of the world array)
+        ctx.strokeStyle = '#f00';
+        ctx.lineWidth = 15;
+        ctx.strokeRect(0, 0, mapWidth * tileSize, mapHeight * tileSize);
+
+        ctx.restore();
+    }
+
+    // Boot up
+    initMap();
+    buildUI();
+    resizeCanvas();
+    render();
+
+</script>
+</body>
+</html>
