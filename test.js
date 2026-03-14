@@ -1,13 +1,37 @@
 // B. P.
 // Snake VI, Sequel to Snake IV
 // 3/11/2026
+
+const gameCanvas = document.getElementById("gameCanvas"); 
+const canvas = document.createElement('canvas');
+gameCanvas.appendChild(canvas);
+
+
+function toggleFullScreen() {
+    if (!document.fullscreenElement) {
+        // If the document is not in fullscreen mode, request fullscreen for the container
+        canvas.requestFullscreen().catch(err => {
+            console.error(`Error attempting to enable fullscreen mode: ${err.message} (${err.name})`);
+        });
+
+        gameCanvas.width = window.screen.width;
+        gameCanvas.height = window.screen.height;
+    } else {
+        // If the document is in fullscreen mode, exit fullscreen
+        document.exitFullscreen();
+        gameCanvas.width = 640; // Reset to default width
+        gameCanvas.height = 480; // Reset to default height
+    }
+}
+
 (() => {
     // Simple browser-game template
-    const canvas = document.getElementById('gameCanvas').appendChild(document.createElement('canvas'));
     const ctx = canvas.getContext('2d');
     document.body.style.margin = '0';
     document.body.style.overflow = 'hidden';
     document.body.appendChild(canvas);
+
+    canvas.setAttribute("draggable", "false");
 
     // Screen Size
     const width = 640;
@@ -56,10 +80,136 @@
     
     // Simple demo player
     const player = {
+
         x: 1025,
         y: 2000,
-        size: 24,
-        speed: 220 // px/s
+        size: 20,
+        visualsize: 48, // For rendering, can be different from hitbox size
+        speed: 220, // px/s
+        velocityX: 0,
+        velocityY: 0,
+        
+
+        // Inventory
+        health: 100,
+        cash: 0,
+        weapons: [['PISTOL', 12], ['BBGUN', 30]], // Value 1: weapon, Value 2: Loaded Ammo
+        equippedWeapon: 0,
+        
+        // Animation
+        legAngle: 0,
+    };
+
+    // Animation Setup
+    const characterAtlas = new Image();
+
+    // Body Positions for different weapons/stances. The tile below each is for the arms.
+    const bodyFrames = {
+        DEFAULT: { x: 0, y: 1 },
+        PISTOL1: { x: 3, y: 1 },
+        PISTOL2: { x: 1, y: 1 },
+        RIFLE2: { x: 2, y: 1 },
+    };
+
+    // Leg animation frames for running
+    const legRunFrames = [
+        { x: 0, y: 0, time: 0.2, flipped: false},
+        { x: 2, y: 0, time: 0.05, flipped: false},
+        { x: 1, y: 0, time: 0.1, flipped: false},
+        
+        { x: 0, y: 0, time: 0.2, flipped: false},
+        { x: 4, y: 0, time: 0.05, flipped: true},
+        { x: 3, y: 0, time: 0.1, flipped: true},
+
+
+    ];
+
+    //===================//
+    // NPC & ENEMIES
+    //===================//
+
+    const npcs = {
+        CIVILIAN: {
+            name: 'Civilian',
+            color: '#4ee',
+            size: 16,
+            speed: 100,
+            health: 50,
+            aiType: 'wander'
+        },
+        
+        POLICE: {
+            name: 'Police',
+            color: '#44a',
+            size: 20,
+            speed: 150,
+            health: 100,
+            aiType: 'armed'
+        },
+
+        GANGSTER: {
+            name: 'Gangster',
+            color: '#a44',
+            size: 20,
+            speed: 130,
+            health: 80,
+            aiType: 'chase',
+        },
+    };
+
+    //===================//
+    // WEAPONS
+    //===================//
+
+    const ammoList = {
+        BB: {
+            name: "BB",
+            price: 8,
+            quantity: 100,
+        },
+        NINEMM: {
+            name: "9mm",
+            price: 12,
+            quantity: 50,
+        },
+    };
+
+    const weaponList = {
+        BBGUN: {
+            name: "BB Gun",
+            bodyFrame: bodyFrames.PISTOL1,
+            speed: 500, // 0 Speed for Hitscan
+            automatic: false,
+            damage: 5,
+            spread: 0.3,
+            fireRate: 0.2,
+            ammoType: "BB",
+            ammo: 30,
+            maxAmmo: 30,
+            reloadTime: 2,
+
+            bulletSize: 4,
+            bulletColor: 'rgb(200, 200, 255)',
+            bulletLifetime: 3,
+        },
+
+        PISTOL: {
+            name: "Pistol",
+            bodyFrame: bodyFrames.PISTOL1, // Pose for holding pistol
+            speed: 900,
+            automatic: false,
+            damage: 20,
+            spread: 0.1,
+            fireRate: 0.5,
+            ammoType: "NINEMM",
+            ammo: 12,
+            maxAmmo: 12,
+            reloadTime: 1,
+
+            bulletSize: 6,
+            bulletColor: 'rgb(255, 255, 100)',
+            bulletLifetime: 3,
+        },
     };
 
     //===================//
@@ -70,6 +220,8 @@
     const tileAtlas = new Image();
     const waterTexture = new Image();
     const mapVerticalLayers = 12
+
+    const drawnTiles = {}; // Storage for tiles drawn in current frame, to allow for spawning of decoration and NPCs
 
     const mapTiles = {
         GRASS: {
@@ -123,6 +275,17 @@
             topLayerTexture: [1, 3], 
         },
 
+        
+        HOUSE2: {
+            name: 'House',
+            color: '#e1c914',
+            height: 1,
+            solid: true,
+            texture: [2, 3],
+            midLayerTexture: [0, 3],
+            topLayerTexture: [3, 3], 
+        },
+
 
         SKYSCRAPER1: {
             name: 'Skyscraper1',
@@ -168,6 +331,7 @@
     };
 
     const mapTileSize = 256;
+    
 
     // Map Layout
 
@@ -178,13 +342,33 @@
     for (let y = 0; y < mapHeight; y++) {
         map[y] = [];
         for (let x = 0; x < mapWidth; x++) {
-            const rand = Math.random();
-            if (rand < 0.7) map[y][x] = "GRASS"; // Grass
-            else if (rand < 0.8) map[y][x] = "TREE"; // Tree
-            else if (rand < 0.85) map[y][x] = "ROAD"; // Road
-            else if (rand < 0.95) map[y][x] = "SIDEWALK"; // Sidewalk
-            else if (Math.random() < 0.5) map[y][x] = "HOUSE1"; // Skyscraper1
-            else map[y][x] = "HOUSE1"; // Skyscraper2
+            // Define weighted tile types for random selection
+            const tileWeights = [
+                { type: "GRASS", weight: 30 },
+                { type: "SIDEWALK", weight: 25 },
+                { type: "ROAD", weight: 20 },
+                { type: "TREE", weight: 8 },
+                { type: "HOUSE1", weight: 5 },
+                { type: "HOUSE2", weight: 5 },
+                { type: "SKYSCRAPER1", weight: 2 },
+                { type: "SKYSCRAPER2", weight: 2 },
+                { type: "SKYSCRAPER3", weight: 2 },
+                { type: "SKYSCRAPER4", weight: 1 }
+            ];
+
+            // Precompute total weight
+            const totalWeight = tileWeights.reduce((sum, t) => sum + t.weight, 0);
+
+            function getRandomTileType() {
+                let r = Math.random() * totalWeight;
+                for (const t of tileWeights) {
+                    if (r < t.weight) return t.type;
+                    r -= t.weight;
+                }
+                return "GRASS"; // fallback
+            }
+
+            map[y][x] = getRandomTileType();
         }
     }
     
@@ -198,28 +382,94 @@
             y: y + player.y - height / 2
         };
     }
+    
+    // function 
+
+    function tileRandom(x, y) {
+        let n = x * 374761393 + y * 668265263; // large primes
+        n = (n ^ (n >> 13)) * 1274126177;
+        return ((n ^ (n >> 16)) >>> 0) / 4294967295;
+    }
+
+    //===================//
+    // DECORATION & NPC SPAWNING
+    //===================//
+
+    const decorationRes = 128; // Resolution of decorations in atlas
+    const worldModifications = new Map(); // To track changes to the world like destroyed objects or spawned NPCs
+    const decorAtlas = new Image();
+
+    // List of decorations and NPCs to spawn on drawn tiles, with distance-based deletion to prevent overcrowding and performance issues.
+
+    const decorTemplates = {
+        BENCH: {
+            type: 'BENCH',
+            solid: true, // Whether it blocks movement
+            size: [10, 20], // for hitbox
+            hitboxOffset: [0, 0], // Offset from tile center for hitbox
+            height: 2, // For rendering layer
+            texture: [3, 0],
+            midLayerTexture: [2, 0],
+            topLayerTexture: [1, 0],
+        },
+    };
+
+
+    
+    function decorate(tileX, tileY) {
+        // Use tileRandom with tile coordinates to get a consistent random value for each tile
+        // If the tile is suitable for decoration and the random value is below a threshold, spawn a decoration
+        const tileID = map[tileY][tileX];
+        const tileInfo = mapTiles[tileID];
+        const rand = tileRandom(tileX, tileY);
+
+        // Example: 10% chance to spawn a bench on sidewalks
+        // (only on sides not meeting other sidewalks to avoid blocking them)
+        if (tileInfo && tileInfo.name === 'Sidewalk' && rand < 1) {
+            
+
+            // Check surrounding tiles to avoid blocking paths
+            const hasSidewalkLeft = map[tileY][tileX - 1] === 'SIDEWALK';
+            const hasSidewalkRight = map[tileY][tileX + 1] === 'SIDEWALK';
+            const hasSidewalkUp = map[tileY - 1] && map[tileY - 1][tileX] === 'SIDEWALK';
+            const hasSidewalkDown = map[tileY + 1] && map[tileY + 1][tileX] === 'SIDEWALK';
+
+            if ((hasSidewalkLeft && !hasSidewalkRight) || (hasSidewalkRight && !hasSidewalkLeft) ||
+                (hasSidewalkUp && !hasSidewalkDown) || (hasSidewalkDown && !hasSidewalkUp)) {
+                
+                // Spawn bench
+                decoration.push({
+                    ...decorTemplates.BENCH,
+                    x: tileX * tileSize + tileSize / 2,
+                    y: tileY * tileSize + tileSize / 2,
+                });
+            }
+        }
+    }
 
     //===================//
     // RENDERING
     //===================//
 
-    function drawTile(tileID, layer, x, y, tileInfo) {
-
+function drawTile(tileID, layer, x, y, tileInfo) {
     // Get TileCoords
     // First check if the tile is bottom, middle or top
+    let tileCoords;
     if (tileInfo.midLayerTexture && layer < tileInfo.height && layer > 0) {
         tileCoords = tileInfo.midLayerTexture;
     } else if (tileInfo.topLayerTexture && layer == tileInfo.height) {
         tileCoords = tileInfo.topLayerTexture;
-    } else { tileCoords = tileInfo.texture; }
-x
+    } else {
+        tileCoords = tileInfo.texture;
+    }
+
     // Get Base Position
     const localPos = worldToScreen(x, y);
     let screenX = localPos.x;
     let screenY = localPos.y;
 
-    const sx = tileCoords[0] * tileSize;
-    const sy = tileCoords[1] * tileSize;
+    const sx = tileCoords[0] * 256;
+    const sy = tileCoords[1] * 256;
 
     // Perspective Math
     const z0 = 500; 
@@ -231,26 +481,27 @@ x
     const centerY = height / 2;
 
     // Calculate the center of the tile to scale from the middle
-    let tileCenterX = screenX + tileSize / 2;
-    let tileCenterY = screenY + tileSize / 2;
+    let tileCenterX = screenX + 256 / 2;
+    let tileCenterY = screenY + 256 / 2;
 
     // Apply the parallax shift to the CENTER point
     tileCenterX = (tileCenterX - centerX) * perspectiveScale + centerX;
     tileCenterY = (tileCenterY - centerY) * perspectiveScale + centerY;
 
     // Match the tile size to the perspective
-    const pTileSize = tileSize * perspectiveScale;
+    const pTileSize = 256 * perspectiveScale;
 
     // Subtract half the new size to keep the tile centered on the shifted point
     ctx.drawImage(
         tileAtlas,
         sx, sy,
-        mapTileSize, mapTileSize,
+        256, 256,
         tileCenterX - pTileSize / 2, 
         tileCenterY - pTileSize / 2,
         pTileSize, pTileSize
     );
 }
+
 
 
     function drawMap(layer) {
@@ -278,10 +529,71 @@ x
 
                 drawTile(tileID, layer, x * tileSize, y * tileSize, tileInfo);
 
-            }
-        }
+                // Decorate the tile
+                if (layer === 0) {
+                    decorate(x, y);
+                }
+
+            };
+        };
     };
 
+    function drawDecorations()  {
+        decoration.forEach(decor => {
+            const screenPos = worldToScreen(decor.x, decor.y);
+            const decorInfo = decorTemplates[decor.type];
+            if (!decorInfo) return;
+
+            for (let layer = 0; layer <= decorInfo.height; layer++) {
+                // Get texture coordinates for the layer (base, mid, top)
+                let tileCoords;
+                if (layer === 0) {
+                    tileCoords = decorInfo.texture;
+                } else if (layer < decorInfo.height && decorInfo.midLayerTexture) {
+                    tileCoords = decorInfo.midLayerTexture;
+                } else if (layer === decorInfo.height && decorInfo.topLayerTexture) {
+                    tileCoords = decorInfo.topLayerTexture;
+                } else {
+                    continue; // No texture for this layer
+                }
+
+                const sx = tileCoords[0] * decorationRes;
+                const sy = tileCoords[1] * decorationRes;
+                console.log(tileCoords)
+
+                // Perspective Math
+                const z0 = 800; 
+                const z = layer * 20; // Shorter, so less distance
+                const perspectiveScale = (z + z0) / z0;
+
+                // Shift the position relative to screen center
+                const centerX = width / 2;
+                const centerY = height / 2;
+
+                // Calculate the center of the decoration to scale from the middle
+                let decorCenterX = screenPos.x;
+                let decorCenterY = screenPos.y;
+
+                // Apply the parallax shift to the CENTER point
+                decorCenterX = (decorCenterX - centerX) * perspectiveScale + centerX;
+                decorCenterY = (decorCenterY - centerY) * perspectiveScale + centerY;
+
+                // Match the tile size to the perspective
+                const pTileSize = decorationRes * perspectiveScale;
+                // Subtract half the new size to keep the decoration centered on the shifted point
+
+                
+                ctx.drawImage(
+                    decorAtlas,
+                    sx, sy,
+                    decorationRes, decorationRes,
+                    decorCenterX - pTileSize / 2, 
+                    decorCenterY - pTileSize / 2,
+                    pTileSize, pTileSize,
+                );
+            }
+        });
+    }
     // Groups of Objects so I can Track them and not be annoyed by the fact that I can't track them you understand right?
 
     const bullets = [];
@@ -290,14 +602,16 @@ x
 
     const characters = [];
 
+    const decoration = [];
+
 
 
 
     // Worldspace to screenspace conversion
     function worldToScreen(x, y) {
         return {
-            x: x - player.x + width / 2,
-            y: y - player.y + height / 2
+            x: Math.floor(x - player.x + width / 2),
+            y: Math.floor(y - player.y + height / 2)
         };
     }
 
@@ -333,8 +647,13 @@ x
             return tile && tile.solid;
         };
 
-        const newX = player.x + (vx / len) * player.speed * dt;
-        const newY = player.y + (vy / len) * player.speed * dt;
+        
+
+        player.velocityX = (vx / len) * player.speed;
+        player.velocityY = (vy / len) * player.speed;
+
+        const newX = player.x + player.velocityX * dt;
+        const newY = player.y + player.velocityY * dt;
 
         if (!checkCollision(newX, player.y)) {
             player.x = newX;
@@ -343,17 +662,20 @@ x
             player.y = newY;
         }
         
-        /*
-        player.x += (vx / len) * player.speed * dt;
-        player.y += (vy / len) * player.speed * dt;
-        */
     }
 
     function render() {
+
+        if (state === State.PAUSED) {
+            return;
+        }
+
         // Clear
         ctx.fillStyle = '#0b1020';
         ctx.fillRect(0, 0, width, height);
         
+        // ====== Layer 0 ====== //
+
         // Draw Water
         ctx.drawImage(waterTexture, 0, 0, width, height);
 
@@ -363,26 +685,114 @@ x
             ctx.fillStyle = '#fff';
             ctx.font = '28px sans-serif';
             ctx.textAlign = 'center';
-            ctx.fillText('Demo Game Template', width / 2, height / 2 - 24);
+            ctx.fillText('Snake VI Test', width / 2, height / 2 - 24);
             ctx.font = '16px sans-serif';
             ctx.fillText('Press Enter to Start', width / 2, height / 2 + 8);
             return;
         }
 
+        
+        // ====== Layer 1 ====== //
+
         // Draw Map layer 1
         drawMap(0); // Ground layer
 
+        // Add decoration or NPCs on drawn tiles
+        drawDecorations();
+
+        // Clear decoration array
+        decoration.length = 0;
+        
+
+        
+        // ====== Playable Layer ====== //
 
         // Draw player
-        ctx.fillStyle = '#4ee';
-        ctx.beginPath();
-        ctx.arc(width / 2, height / 2, player.size / 2, 0, Math.PI * 2);
-        ctx.fill();
+        const playerScreenPos = worldToScreen(player.x, player.y);
 
+        // Determine movement direction based on VelocityX and VelocityY
+        const moveSpeed = Math.hypot(player.velocityX, player.velocityY);
+        let legFrame = legRunFrames[0]; // Default to first frame when idle
 
+        if (moveSpeed > 0.01) {
+            // Determine movement direction for leg/step angle
+            player.legAngle = Math.atan2(player.velocityY, player.velocityX) - Math.PI / 2;
+
+            legFrame = legRunFrames[Math.floor((performance.now() / 100) % legRunFrames.length)];
+        } else {
+            // Keep last known direction when stopped
+            player.legAngle = player.legAngle ?? 0;
+        }
+
+        // Draw legs at player position
+        ctx.save();
+        ctx.translate(playerScreenPos.x, playerScreenPos.y);
+        ctx.rotate(player.legAngle);
+        
+        ctx.drawImage(
+            characterAtlas,
+            legFrame.x * player.visualsize, legFrame.y * player.visualsize,
+            player.visualsize, player.visualsize,
+            -player.visualsize / 2, -player.visualsize / 2,
+            player.visualsize, player.visualsize
+        );
+        ctx.restore();
+
+        // Render arm & torso sprite rotated towards cursor
+        const angle = Math.atan2(mouseY - playerScreenPos.y, mouseX - playerScreenPos.x) - Math.PI / 2;
+        ctx.save();
+        ctx.translate(playerScreenPos.x, playerScreenPos.y);
+        ctx.rotate(angle);
+
+        // Get body frame based on equipped weapon
+        const equippedWeapon = weaponList[player.weapons[player.equippedWeapon][0]];
+        let frame = bodyFrames.DEFAULT;
+
+        if (equippedWeapon) {
+            frame = equippedWeapon.bodyFrame || bodyFrames.DEFAULT;
+        }
+
+        const torsoX = frame.x * player.visualsize;
+        const torsoY = frame.y * player.visualsize;
+
+        // Draw arms
+        ctx.drawImage(
+            characterAtlas,
+            torsoX, torsoY + player.visualsize, // Arms are in the tile below the torso
+            player.visualsize, player.visualsize,
+            -player.visualsize / 2, -player.visualsize / 2,
+            player.visualsize, player.visualsize
+        );
+
+        // Draw torso
+        ctx.drawImage(
+            characterAtlas,
+            torsoX, torsoY,
+            player.visualsize, player.visualsize,
+            -player.visualsize / 2, -player.visualsize / 2,
+            player.visualsize, player.visualsize
+        );
+
+         // Draw head
+        ctx.drawImage(
+            characterAtlas,
+            0, 3 * player.visualsize, // Head is in the tile below the arms
+            player.visualsize, player.visualsize,
+            -player.visualsize / 2, -player.visualsize / 2,
+            player.visualsize, player.visualsize
+        );
+
+        ctx.restore();
 
         // Draw Bullets
         bullets.forEach(bullet => {
+            // Check bullet lifetime
+            bullet.lifetime -= timestep;
+            if (bullet.lifetime <= 0) {
+                bullets.splice(bullets.indexOf(bullet), 1);
+                return;
+            }
+            
             // Check if bullet should be on screen
             const screenPos = worldToScreen(bullet.x, bullet.y);
             if (screenPos.x < -bullet.size || screenPos.x > width + bullet.size || screenPos.y < -bullet.size || screenPos.y > height + bullet.size) {
@@ -395,11 +805,15 @@ x
             ctx.fill();
         });
 
+        // ====== Layer 2+ ====== //
 
         // Draw map layers above
         for (let layer = 1; layer < mapVerticalLayers; layer++) {
             drawMap(layer);
         }
+
+        // ====== UI Layer ====== //
+
 
         // Simple HUD
         ctx.fillStyle = '#fff';
@@ -408,6 +822,7 @@ x
         ctx.fillText(`State: ${state}`, 10, 20);
         ctx.fillText(`FPS: ${Math.round(fps)}`, 10, 40);
         ctx.fillText(`Position: (${Math.round(player.x)}, ${Math.round(player.y)})`, 10, 60);
+        ctx.fillText(`Health: ${Math.round(player.health)}, Weapon: ${player.weapons[player.equippedWeapon][0]}`, 10, 80);
         ctx.fillText('Arrows / WASD to move, Esc to pause', 10, height - 10);
     }
 
@@ -420,19 +835,16 @@ x
         }
     });
 
-    window.addEventListener('mousemove', (event) => {
-        let mouseX = event.clientX;
-        let mouseY = event.clientY;
-        
-        // convert mouse position to world coordinates
-        const rect = canvas.getBoundingClientRect();
-    });
+    // Remove duplicate and unused mousemove handler
 
 
 
-    window.addEventListener('click', (e) => {
+    window.addEventListener('click', () => {
+        // Only shoot if in play state
         if (state === State.PLAY) {
-            // get mouse position and rotation from character's position
+            // Get equipped weapon
+            const equippedWeapon = weaponList[player.weapons[player.equippedWeapon][0]]; // Check if weapon exists and has ammo
+            if (!equippedWeapon) return; // No weapon equipped
 
             // convert mouse position to world coordinates
             const worldMouse = screenToWorld(mouseX, mouseY);
@@ -440,19 +852,19 @@ x
             // calculate angle from player to mouse
             const angle = Math.atan2(worldMouse.y - player.y, worldMouse.x - player.x);
 
-            // Temporary hardcoded bullet properties
-            const bulletspeed = 800;
-            const bulletspread = 0.1;
+            // Calculate spread
+            const spread = (Math.random() * equippedWeapon.spread - equippedWeapon.spread / 2);
 
-            // Add bullet with random spread
+            // Add bullet with weapon settings
             bullets.push({
                 x: (Math.cos(angle) * player.size) + player.x,
                 y: (Math.sin(angle) * player.size) + player.y,
-                velocityX: Math.cos(angle + (Math.random() * bulletspread - bulletspread / 2)) * bulletspeed,
-                velocityY: Math.sin(angle + (Math.random() * bulletspread - bulletspread / 2)) * bulletspeed,
-                size: 8,
-                color: '#f00',
-                damage: 10,
+                velocityX: Math.cos(angle + spread) * equippedWeapon.speed,
+                velocityY: Math.sin(angle + spread) * equippedWeapon.speed,
+                size: equippedWeapon.bulletSize || 8,
+                color: equippedWeapon.bulletColor || 'rgb(255, 255, 0)',
+                damage: equippedWeapon.damage,
+                lifetime: equippedWeapon.bulletLifetime || 3 // seconds
             });
         }
     });
@@ -468,7 +880,7 @@ x
             update(timestep);
             accumulator -= timestep;
         }
-
+        
         // Render
         render();
 
@@ -494,9 +906,11 @@ x
     }
 
     // Minimal asset loader stub
-    function loadAssets(list = []) {
+    function loadAssets() {
         tileAtlas.src = "Assets/Textures/TileAtlas.png";
+        decorAtlas.src = "Assets/Textures/DecorAtlas.png";
         waterTexture.src = "Assets/Textures/Water.gif";
+        characterAtlas.src = "Assets/Textures/characterTest.png";
 
         return Promise.resolve();
     }
