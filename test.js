@@ -70,6 +70,13 @@ function toggleFullScreen() {
         if (e.key === 'Escape') {
             state = state === State.PLAY ? State.PAUSED : State.PLAY;
         }
+
+        // Zoom controls via keyboard
+        if (e.key === '+' || e.key === '=') {
+            camera.zoom = Math.min(5, camera.zoom * 1.1);
+        } else if (e.key === '-' || e.key === '_') {
+            camera.zoom = Math.max(0.01, camera.zoom / 1.1);
+        }
     });
     window.addEventListener('keyup', (e) => { keys[e.key] = false; });
 
@@ -84,6 +91,13 @@ function toggleFullScreen() {
 
     let mouseX = 0;
     let mouseY = 0;
+
+    // Establish Camera
+    const camera = {
+        x: 0,
+        y: 0,
+        zoom: 1, // default zoom (1 = 100%)
+    };
 
 
     // Simple demo player
@@ -373,17 +387,23 @@ function toggleFullScreen() {
     }
 
     function drawParticles(start) {
+        // pre-calc world extents for culling
+        const halfWorldW = (width / 2) / camera.zoom;
+        const halfWorldH = (height / 2) / camera.zoom;
+        const marginWorld = 100 / camera.zoom;
+
         particles.forEach(p => {
+            // quick world-space cull
+            if (p.x < player.x - halfWorldW - marginWorld || p.x > player.x + halfWorldW + marginWorld ||
+                p.y < player.y - halfWorldH - marginWorld || p.y > player.y + halfWorldH + marginWorld) {
+                return;
+            }
+
             if ((start === false && p.height === 0) || (start == true && p.height > 0)) return;
 
             const localPos = worldToScreen(p.x, p.y);
             let screenX = localPos.x;
             let screenY = localPos.y;
-
-            if (
-                screenX < -50 || screenX > width + 50 ||
-                screenY < -50 || screenY > height + 50
-            ) return;
 
             const tileSize = 48;
             const atlasX = p.texture[0] * tileSize;
@@ -393,7 +413,7 @@ function toggleFullScreen() {
             const z0 = 600;
 
             // Use particle height (or default to 0)
-            const z = (p.height * 20 || 0);
+            const z = (p.height * 20 || 0) * camera.zoom;
 
             const perspectiveScale = (z + z0) / z0;
 
@@ -408,8 +428,8 @@ function toggleFullScreen() {
             centerPX = (centerPX - centerX) * perspectiveScale + centerX;
             centerPY = (centerPY - centerY) * perspectiveScale + centerY;
 
-            // Scale size with perspective
-            const pSize = p.size * perspectiveScale;
+            // Scale size with perspective and camera zoom
+            const pSize = p.size * perspectiveScale * camera.zoom;
 
             ctx.save();
 
@@ -492,7 +512,7 @@ function toggleFullScreen() {
             name: "BB Gun",
             texture: [1, 0],
             bodyFrame: bodyFrames.RIFLE2,
-            speed: 500, // 0 Speed for Hitscan
+            speed: 1500, // 0 Speed for Hitscan
             automatic: false,
             damage: 5,
             spread: 0.3,
@@ -511,7 +531,7 @@ function toggleFullScreen() {
             name: "Pistol",
             texture: [2, 0],
             bodyFrame: bodyFrames.PISTOL1, // Pose for holding pistol
-            speed: 900,
+            speed: 1500,
             automatic: false,
             damage: 20,
             spread: 0.1,
@@ -695,9 +715,10 @@ function toggleFullScreen() {
     // Screen Position Functions
 
     function screenToWorld(x, y) {
+        // Convert screen (canvas) coords to world coords considering zoom and player center
         return {
-            x: x + player.x - width / 2,
-            y: y + player.y - height / 2
+            x: (x - width / 2) / camera.zoom + player.x,
+            y: (y - height / 2) / camera.zoom + player.y
         };
     }
 
@@ -908,10 +929,13 @@ function toggleFullScreen() {
 
         decoration.length = 0;
 
-        const startX = Math.max(0, Math.floor((player.x - width / 2) / tileSize));
-        const endX = Math.min(map[0].length, Math.ceil((player.x + width / 2) / tileSize));
-        const startY = Math.max(0, Math.floor((player.y - height / 2) / tileSize));
-        const endY = Math.min(map.length, Math.ceil((player.y + height / 2) / tileSize));
+        const halfWorldW = (width / 2) / camera.zoom;
+        const halfWorldH = (height / 2) / camera.zoom;
+
+        const startX = Math.max(0, Math.floor((player.x - halfWorldW) / tileSize));
+        const endX = Math.min(map[0].length, Math.ceil((player.x + halfWorldW) / tileSize));
+        const startY = Math.max(0, Math.floor((player.y - halfWorldH) / tileSize));
+        const endY = Math.min(map.length, Math.ceil((player.y + halfWorldH) / tileSize));
 
         for (let y = startY; y < endY; y++) {
             for (let x = startX; x < endX; x++) {
@@ -981,28 +1005,28 @@ function toggleFullScreen() {
         let screenX = localPos.x;
         let screenY = localPos.y;
 
-        const sx = tileCoords[0] * 256;
-        const sy = tileCoords[1] * 256;
+        const sx = (tileCoords[0] * 256);
+        const sy = (tileCoords[1] * 256);
 
         // Perspective Math
         const z0 = 500;
-        const z = layer * 60;
+        const z = layer * 60 * camera.zoom;
         const perspectiveScale = (z + z0) / z0;
 
         // Shift the position relative to screen center
-        const centerX = width / 2;
-        const centerY = height / 2;
+        const centerX = (width / 2);
+        const centerY = (height / 2);
 
         // Calculate the center of the tile to scale from the middle
-        let tileCenterX = screenX + 256 / 2;
-        let tileCenterY = screenY + 256 / 2;
+        let tileCenterX = screenX + 256 / 2 * camera.zoom;
+        let tileCenterY = screenY + 256 / 2 * camera.zoom;
 
         // Apply the parallax shift to the CENTER point
         tileCenterX = (tileCenterX - centerX) * perspectiveScale + centerX;
         tileCenterY = (tileCenterY - centerY) * perspectiveScale + centerY;
 
-        // Match the tile size to the perspective
-        const pTileSize = 256 * perspectiveScale;
+        // Match the tile size to the perspective and camera zoom
+        const pTileSize = (256 * perspectiveScale) * camera.zoom;
 
         // Subtract half the new size to keep the tile centered on the shifted point
         ctx.drawImage(
@@ -1018,11 +1042,14 @@ function toggleFullScreen() {
 
 
     function drawMap(layer) {
-        // First Determine visible tiles based on player position and screen size
-        const startX = Math.max(0, Math.floor((player.x - width / 2) / tileSize));
-        const endX = Math.min(map[0].length, Math.ceil((player.x + width / 2) / tileSize));
-        const startY = Math.max(0, Math.floor((player.y - height / 2) / tileSize));
-        const endY = Math.min(map.length, Math.ceil((player.y + height / 2) / tileSize));
+        // First Determine visible tiles based on player position and screen size (account for zoom)
+        const halfWorldW = (width / 2) / camera.zoom;
+        const halfWorldH = (height / 2) / camera.zoom;
+
+        const startX = Math.max(0, Math.floor((player.x - halfWorldW) / tileSize));
+        const endX = Math.min(map[0].length, Math.ceil((player.x + halfWorldW) / tileSize));
+        const startY = Math.max(0, Math.floor((player.y - halfWorldH) / tileSize));
+        const endY = Math.min(map.length, Math.ceil((player.y + halfWorldH) / tileSize));
 
         // Then draw only those tiles
         for (let y = startY; y < endY; y++) {
@@ -1048,7 +1075,7 @@ function toggleFullScreen() {
     function drawDecorationHitboxes() {
 
         ctx.strokeStyle = "red";
-        ctx.lineWidth = 2;
+        ctx.lineWidth = 2 * camera.zoom;
 
         decoration.forEach(decor => {
 
@@ -1060,8 +1087,8 @@ function toggleFullScreen() {
                 decor.y + decorInfo.hitboxOffset[1]
             );
 
-            const w = decorInfo.size[0];
-            const h = decorInfo.size[1];
+            const w = decorInfo.size[0] * camera.zoom;
+            const h = decorInfo.size[1] * camera.zoom;
 
             ctx.save();
 
@@ -1081,6 +1108,12 @@ function toggleFullScreen() {
 
     function drawDecorations() {
         decoration.forEach(decor => {
+            // world-space culling for decorations
+            const halfWorldW = (width / 2) / camera.zoom;
+            const halfWorldH = (height / 2) / camera.zoom;
+            if (decor.x < player.x - halfWorldW - 200 || decor.x > player.x + halfWorldW + 200 ||
+                decor.y < player.y - halfWorldH - 200 || decor.y > player.y + halfWorldH + 200) return;
+
             const screenPos = worldToScreen(decor.x, decor.y);
             const decorInfo = decorTemplates[decor.type];
             if (!decorInfo) return;
@@ -1103,7 +1136,7 @@ function toggleFullScreen() {
 
                 // Perspective math
                 const z0 = 800;
-                const z = layer * 20;
+                const z = layer * 20 * camera.zoom;
                 const perspectiveScale = (z + z0) / z0;
 
                 const centerX = width / 2;
@@ -1115,7 +1148,7 @@ function toggleFullScreen() {
                 decorCenterX = (decorCenterX - centerX) * perspectiveScale + centerX;
                 decorCenterY = (decorCenterY - centerY) * perspectiveScale + centerY;
 
-                const pTileSize = decorationRes * perspectiveScale;
+                const pTileSize = decorationRes * perspectiveScale * camera.zoom;
 
                 ctx.save();
 
@@ -1144,8 +1177,8 @@ function toggleFullScreen() {
     // Worldspace to screenspace conversion
     function worldToScreen(x, y) {
         return {
-            x: Math.floor(x - player.x + width / 2),
-            y: Math.floor(y - player.y + height / 2)
+            x: Math.floor((x - player.x) * camera.zoom + width / 2),
+            y: Math.floor((y - player.y) * camera.zoom + height / 2)
         };
     }
 
@@ -1350,12 +1383,14 @@ function toggleFullScreen() {
         ctx.translate(playerScreenPos.x, playerScreenPos.y);
         ctx.rotate(player.legAngle);
 
+        const vs = player.visualsize * camera.zoom;
+
         ctx.drawImage(
             characterAtlas,
             legFrame.x * player.visualsize, legFrame.y * player.visualsize,
             player.visualsize, player.visualsize,
-            -player.visualsize / 2, -player.visualsize / 2,
-            player.visualsize, player.visualsize
+            -vs / 2, -vs / 2,
+            vs, vs
         );
         ctx.restore();
 
@@ -1381,8 +1416,8 @@ function toggleFullScreen() {
             characterAtlas,
             torsoX, torsoY + player.visualsize, // Arms are in the tile below the torso
             player.visualsize, player.visualsize,
-            -player.visualsize / 2, -player.visualsize / 2,
-            player.visualsize, player.visualsize
+            -vs / 2, -vs / 2,
+            vs, vs
         );
 
 
@@ -1396,8 +1431,8 @@ function toggleFullScreen() {
                 weaponAtlas,
                 weaponX, weaponY,
                 player.visualsize, player.visualsize,
-                -player.visualsize / 2, -player.visualsize / 2,
-                player.visualsize, player.visualsize
+                -vs / 2, -vs / 2,
+                vs, vs
             );
 
         }
@@ -1407,8 +1442,8 @@ function toggleFullScreen() {
             characterAtlas,
             torsoX, torsoY,
             player.visualsize, player.visualsize,
-            -player.visualsize / 2, -player.visualsize / 2,
-            player.visualsize, player.visualsize
+            -vs / 2, -vs / 2,
+            vs, vs
         );
 
         // Draw head
@@ -1416,32 +1451,38 @@ function toggleFullScreen() {
             characterAtlas,
             0, 3 * player.visualsize, // Head is in the tile below the arms
             player.visualsize, player.visualsize,
-            -player.visualsize / 2, -player.visualsize / 2,
-            player.visualsize, player.visualsize
+            -vs / 2, -vs / 2,
+            vs, vs
         );
 
         ctx.restore();
 
         // Draw Bullets
-        bullets.forEach(bullet => {
+        for (let i = bullets.length - 1; i >= 0; i--) {
+            const bullet = bullets[i];
+
             // Check bullet lifetime
             bullet.lifetime -= timestep;
             if (bullet.lifetime <= 0) {
-                bullets.splice(bullets.indexOf(bullet), 1);
-                return;
+                bullets.splice(i, 1);
+                continue;
+            }
+
+            // world-space cull
+            const halfWorldW = (width / 2) / camera.zoom;
+            const halfWorldH = (height / 2) / camera.zoom;
+            if (bullet.x < player.x - halfWorldW - 50 || bullet.x > player.x + halfWorldW + 50 ||
+                bullet.y < player.y - halfWorldH - 50 || bullet.y > player.y + halfWorldH + 50) {
+                continue; // Skip drawing off-screen bullets
             }
 
             // Check if bullet should be on screen
             const screenPos = worldToScreen(bullet.x, bullet.y);
-            if (screenPos.x < -bullet.size || screenPos.x > width + bullet.size || screenPos.y < -bullet.size || screenPos.y > height + bullet.size) {
-                return; // Skip drawing off-screen bullets
-            }
-
             ctx.fillStyle = bullet.color;
             ctx.beginPath();
-            ctx.arc(screenPos.x, screenPos.y, bullet.size / 2, 0, Math.PI * 2);
+            ctx.arc(screenPos.x, screenPos.y, (bullet.size / 2) * camera.zoom, 0, Math.PI * 2);
             ctx.fill();
-        });
+        }
 
 
         // Upper Particles
@@ -1492,8 +1533,8 @@ function toggleFullScreen() {
         // Only shoot if in play state
         if (state === State.PLAY) {
             // Test Particles
-            // const testPose = screenToWorld(Math.random() * width, Math.random() * height)
-            // createExplosion(testPose.x, testPose.y)
+            const testPose = screenToWorld(Math.random() * width, Math.random() * height)
+            createExplosion(testPose.x, testPose.y)
 
 
             // Get equipped weapon
@@ -1522,6 +1563,16 @@ function toggleFullScreen() {
             });
         }
     });
+
+    // Mouse wheel zoom
+    window.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const delta = Math.sign(e.deltaY);
+        const zoomFactor = Math.pow(1.2, -delta);
+        camera.zoom = Math.max(0.06, Math.min(2
+            , camera.zoom * zoomFactor));
+    }, { passive: false });
+
 
     function loop(now) {
         // Calculate delta time
