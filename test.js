@@ -52,7 +52,7 @@ function toggleFullScreen() {
 
     const bullets = [];
 
-    const vehicles = [];
+    const vehicles = [{ id: "SPORTSCAR", position: { x: 20000, y: 20000 }, rotation: 0, velocity: { x: 0, y: 0 }, health: 100 }];
 
     const characters = [];
 
@@ -452,6 +452,57 @@ function toggleFullScreen() {
 
         ctx.globalAlpha = 1;
     }
+
+    //===================//
+    // VEHICLES
+    //===================//
+
+    const vehicleAtlas = new Image();
+
+    const vehicleTypes = {
+        SPORTSCAR: {
+            name: 'Sports Car',
+
+            // Visual
+            texture: [0, 0],
+
+            // Collision
+            collision: {
+                width: 100,
+                height: 200,
+                offsetX: 0,
+                offsetY: 0
+            },
+
+            // Gameplay
+            maxHealth: 100,
+
+            // Stats
+            speed: 200,
+            handling: 0.9,
+            acceleration: 0.8,
+            weight: 0.8
+        },
+
+    };
+
+    // Draw vehicles from vehicles array
+    function drawVehicles() {
+        for (const vehicle of vehicles) {
+            // Draw each vehicle
+            // Draw vehicle's texture at position
+            const vehicleType = vehicleTypes[vehicle.id];
+            if (vehicleType) {
+            console.log(`Drawing vehicle: ${vehicle.id}`);
+                const texture = vehicleType.texture;
+                const vehiclePosition = worldToScreen(vehicle.position.x, vehicle.position.y);
+                const vehicleSize = tileSize * camera.zoom;
+                ctx.drawImage(vehicleAtlas, texture[0] * tileSize, texture[1] * tileSize, tileSize, tileSize, vehiclePosition.x, vehiclePosition.y, vehicleSize, vehicleSize);
+            }
+
+        }
+    }
+
 
 
     //===================//
@@ -988,6 +1039,37 @@ function toggleFullScreen() {
     // RENDERING
     //===================//
 
+    function perspectiveMath() {
+        // Get Base Position
+        const localPos = worldToScreen(x, y);
+        let screenX = localPos.x;
+        let screenY = localPos.y;
+
+        const sx = (tileCoords[0] * 256);
+        const sy = (tileCoords[1] * 256);
+
+        // Perspective Math
+        const z0 = 500;
+        const z = layer * 60 * camera.zoom;
+        const perspectiveScale = (z + z0) / z0;
+
+        // Shift the position relative to screen center
+        const centerX = (width / 2);
+        const centerY = (height / 2);
+
+        // Calculate the center of the tile to scale from the middle
+        let tileCenterX = screenX + 256 / 2 * camera.zoom;
+        let tileCenterY = screenY + 256 / 2 * camera.zoom;
+
+        // Apply the parallax shift to the CENTER point
+        tileCenterX = (tileCenterX - centerX) * perspectiveScale + centerX;
+        tileCenterY = (tileCenterY - centerY) * perspectiveScale + centerY;
+
+        // Match the tile size to the perspective and camera zoom
+        const pTileSize = Math.ceil((256 * perspectiveScale) * camera.zoom);
+
+    }
+
     function drawTile(tileID, layer, x, y, tileInfo) {
         // Get TileCoords
         // First check if the tile is bottom, middle or top
@@ -1026,7 +1108,7 @@ function toggleFullScreen() {
         tileCenterY = (tileCenterY - centerY) * perspectiveScale + centerY;
 
         // Match the tile size to the perspective and camera zoom
-        const pTileSize = (256 * perspectiveScale) * camera.zoom;
+        const pTileSize = Math.ceil((256 * perspectiveScale) * camera.zoom);
 
         // Subtract half the new size to keep the tile centered on the shifted point
         ctx.drawImage(
@@ -1035,7 +1117,8 @@ function toggleFullScreen() {
             256, 256,
             tileCenterX - pTileSize / 2,
             tileCenterY - pTileSize / 2,
-            pTileSize, pTileSize
+            pTileSize,
+            pTileSize
         );
     }
 
@@ -1361,6 +1444,9 @@ function toggleFullScreen() {
 
         // ====== Playable Layer ====== //
 
+        // Draw vehicles
+        drawVehicles()
+
         // Draw player
         const playerScreenPos = worldToScreen(player.x, player.y);
 
@@ -1568,7 +1654,7 @@ function toggleFullScreen() {
     window.addEventListener('wheel', (e) => {
         e.preventDefault();
         const delta = Math.sign(e.deltaY);
-        const zoomFactor = Math.pow(1.2, -delta);
+        const zoomFactor = Math.pow(2, -delta);
         camera.zoom = Math.max(0.06, Math.min(2
             , camera.zoom * zoomFactor));
     }, { passive: false });
@@ -1634,6 +1720,7 @@ function toggleFullScreen() {
             loadImage(characterAtlas, "Assets/Textures/characterTest.png"),
             loadImage(weaponAtlas, "Assets/Textures/WeaponAtlas.png"),
             loadImage(particleAtlas, "Assets/Textures/ParticleAtlas.png"),
+            loadImage(vehicleAtlas, "Assets/Textures/CarAtlas.png"),
             ...soundList.map(name => loadSound(name))
         ];
 
